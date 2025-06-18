@@ -4,7 +4,9 @@
         "shovelware": {
             "_placement": 1,
             "_translation": "shovelware",
-            "developers": [],
+            "developers": [
+                "SONKA"
+            ],
             "ids": [],
             "publishers": [
                 "17Studio",
