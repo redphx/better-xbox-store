@@ -1,6 +1,13 @@
 {
     "$schemaVersion": 1,
     "data": {
+        "_exception": {
+            "developers": [
+                "QUByte Interactive"
+            ],
+            "ids": [],
+            "publishers": []
+        },
         "shovelware": {
             "_placement": 1,
             "_translation": "shovelware",
