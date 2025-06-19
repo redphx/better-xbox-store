@@ -1,0 +1,16 @@
+// ==UserScript==
+// @name         Better Xbox Store
+// @namespace    https://github.com/redphx
+// @version      [[VERSION]]
+// @description  Add QoL features to the xbox.com website
+// @author       redphx
+// @license      MIT
+// @match        https://www.xbox.com/*
+// @exclude      https://www.xbox.com/*/auth/*
+// @exclude      https://www.xbox.com/*/play*
+// @run-at       document-start
+// @grant        none
+// @updateURL    https://raw.githubusercontent.com/redphx/better-xbox-store/main/dist/better-xbox-store.meta.js
+// @downloadURL  https://github.com/redphx/better-xbox-store/releases/latest/download/better-xbox-store.user.js
+// ==/UserScript==
+"use strict";

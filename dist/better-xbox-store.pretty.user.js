@@ -1,0 +1,463 @@
+// ==UserScript==
+// @name         Better Xbox Store
+// @namespace    https://github.com/redphx
+// @version      1.0.0-beta
+// @description  Add QoL features to the xbox.com website
+// @author       redphx
+// @license      MIT
+// @match        https://www.xbox.com/*
+// @exclude      https://www.xbox.com/*/auth/*
+// @exclude      https://www.xbox.com/*/play*
+// @run-at       document-start
+// @grant        none
+// @updateURL    https://raw.githubusercontent.com/redphx/better-xbox-store/main/dist/better-xbox-store.meta.js
+// @downloadURL  https://github.com/redphx/better-xbox-store/releases/latest/download/better-xbox-store.user.js
+// ==/UserScript==
+"use strict";
+var SCRIPT_VERSION = "1.0.0-beta";
+var DEFAULT_FLAGS = {
+ Debug: !0,
+ CheckForUpdate: !0,
+ FeatureGates: null
+}, BX_FLAGS = Object.assign(DEFAULT_FLAGS, window.BX_FLAGS || {});
+try {
+ delete window.BX_FLAGS;
+} catch (e) {}
+var NATIVE_FETCH = window.fetch;
+class BxLogger {
+ static info = (tag, ...args) => BX_FLAGS.Debug && BxLogger.log("#008746", tag, ...args);
+ static warning = (tag, ...args) => BX_FLAGS.Debug && BxLogger.log("#c1a404", tag, ...args);
+ static error = (tag, ...args) => BxLogger.log("#c10404", tag, ...args);
+ static log(color, tag, ...args) {
+  console.log("%c[BxC]", `color:${color};font-weight:bold;`, tag, "//", ...args);
+ }
+}
+window.BxLogger = BxLogger;
+class PatcherUtils {
+ static indexOf(txt, searchString, startIndex, maxRange = 0, after = !1) {
+  if (startIndex < 0) return -1;
+  let index = txt.indexOf(searchString, startIndex);
+  if (index < 0 || maxRange && index - startIndex > maxRange) return -1;
+  return after ? index + searchString.length : index;
+ }
+ static lastIndexOf(txt, searchString, startIndex, maxRange = 0, after = !1) {
+  if (startIndex < 0) return -1;
+  let index = txt.lastIndexOf(searchString, startIndex);
+  if (index < 0 || maxRange && startIndex - index > maxRange) return -1;
+  return after ? index + searchString.length : index;
+ }
+ static insertAt(txt, index, insertString) {
+  return txt.substring(0, index) + insertString + txt.substring(index);
+ }
+ static replaceWith(txt, index, fromString, toString) {
+  return txt.substring(0, index) + toString + txt.substring(index + fromString.length);
+ }
+ static replaceAfterIndex(txt, search, replaceWith, index) {
+  let before = txt.slice(0, index), after = txt.slice(index).replace(search, replaceWith);
+  return before + after;
+ }
+ static filterPatches(patches) {
+  return patches.filter((item2) => !!item2);
+ }
+ static isVarCharacter(char) {
+  let code = char.charCodeAt(0), isUppercase = code >= 65 && code <= 90, isLowercase = code >= 97 && code <= 122, isDigit = code >= 48 && code <= 57;
+  return isUppercase || isLowercase || isDigit || (char === "_" || char === "$");
+ }
+ static getVariableNameBefore(str, index) {
+  if (index < 0) return null;
+  let end = index, start = end - 1;
+  while (PatcherUtils.isVarCharacter(str[start]))
+   start -= 1;
+  return str.substring(start + 1, end);
+ }
+ static getVariableNameAfter(str, index) {
+  if (index < 0) return null;
+  let start = index, end = start + 1;
+  while (PatcherUtils.isVarCharacter(str[end]))
+   end += 1;
+  return str.substring(start, end);
+ }
+ static injectUseEffect(str, index, group, eventName, separator = ";") {
+  let newCode = `window.BX_EXPOSED.reactUseEffect(() => window.BxEventBus.${group}.emit('${eventName}', {}), [])${separator}`;
+  return str = PatcherUtils.insertAt(str, index, newCode), str;
+ }
+ static findAndParseParams(str, index, maxRange) {
+  let substr = str.substring(index, index + maxRange), startIndex = substr.indexOf("({");
+  if (startIndex < 0) return !1;
+  startIndex += 1;
+  let endIndex = substr.indexOf("})", startIndex);
+  if (endIndex < 0) return !1;
+  endIndex += 1;
+  try {
+   let input = substr.substring(startIndex, endIndex);
+   return PatcherUtils.parseObjectVariables(input);
+  } catch {
+   return null;
+  }
+ }
+ static parseObjectVariables(input) {
+  try {
+   let pairs = [...input.matchAll(/(\w+)\s*:\s*([a-zA-Z_$][\w$]*)/g)], result = {};
+   for (let [_, key, value] of pairs)
+    result[key] = value;
+   return result;
+  } catch {
+   return null;
+  }
+ }
+}
+class BxEventBus {
+ listeners = new Map;
+ group;
+ static Script = new BxEventBus("script", {
+  "dialog.shown": "onDialogShown",
+  "dialog.dismissed": "onDialogDismissed"
+ });
+ static Stream = new BxEventBus("web", {});
+ constructor(group, appJsInterfaces) {
+  this.group = group;
+ }
+ on(event, callback) {
+  if (!this.listeners.has(event)) this.listeners.set(event, new Set);
+  this.listeners.get(event).add(callback), BX_FLAGS.Debug && BxLogger.warning("EventBus", "on", event, callback);
+ }
+ once(event, callback) {
+  let wrapper = (...args) => {
+   callback(...args), this.off(event, wrapper);
+  };
+  this.on(event, wrapper);
+ }
+ off(event, callback) {
+  if (BX_FLAGS.Debug && BxLogger.warning("EventBus", "off", event, callback), !callback) {
+   this.listeners.delete(event);
+   return;
+  }
+  let callbacks = this.listeners.get(event);
+  if (!callbacks) return;
+  if (callbacks.delete(callback), callbacks.size === 0) this.listeners.delete(event);
+ }
+ offAll() {
+  this.listeners.clear();
+ }
+ emit(event, payload) {
+  let callbacks = this.listeners.get(event) || [];
+  for (let callback of callbacks)
+   callback(payload);
+  BX_FLAGS.Debug && BxLogger.warning("EventBus", "emit", `${this.group}.${event}`, payload);
+ }
+}
+window.BxEventBus = BxEventBus;
+function hashCode(str) {
+ let hash = 0;
+ for (let i = 0, len = str.length;i < len; i++) {
+  let chr = str.charCodeAt(i);
+  hash = (hash << 5) - hash + chr, hash |= 0;
+ }
+ return hash;
+}
+function renderString(str, obj) {
+ return str.replace(/\$\{([A-Za-z0-9_$]+)\}|\$([A-Za-z0-9_$]+)\$/g, (match, p1, p2) => {
+  let name = p1 || p2;
+  return name in obj ? obj[name] : match;
+ });
+}
+var filter_games_default = `try{let product=$productSummaryInfoVar$.product;if(!window.BX_EXPOSED.shouldAllowProduct(product))return null}catch(e){}`;
+var LOG_TAG = "Patcher", PATCHES = {
+ filterGames(str) {
+  let index = str.indexOf('("productCardAltText",{');
+  if (index >= 0 && (index = PatcherUtils.lastIndexOf(str, "productSummaryInfo:", index, 1000, !0)), index < 0) return !1;
+  let productSummaryInfoVar = PatcherUtils.getVariableNameAfter(str, index);
+  if (!productSummaryInfoVar) return !1;
+  if (index = PatcherUtils.indexOf(str, ";", index, 300, !0), index < 0) return !1;
+  let newCode = renderString(filter_games_default, {
+   productSummaryInfoVar
+  });
+  return str = PatcherUtils.insertAt(str, index, newCode + ";"), str;
+ },
+ filterGamesProductCard(str) {
+  let index = str.indexOf('.createElement("li",{key:`productCard-');
+  if (index >= 0 && (index = PatcherUtils.lastIndexOf(str, ".map(", index, 30)), index < 0) return !1;
+  let productsVar = PatcherUtils.getVariableNameBefore(str, index);
+  if (!productsVar) return !1;
+  index -= productsVar.length;
+  let newCode = `(${productsVar} = ${productsVar}.filter(item => window.BX_EXPOSED.shouldAllowProduct(item.product)), true) && `;
+  return str = PatcherUtils.insertAt(str, index, newCode), str;
+ },
+ modifyPreloadedState(str) {
+  let text = "=window.__PRELOADED_STATE__;";
+  if (!str.includes(text)) return !1;
+  return str = str.replace(text, "=window.BX_EXPOSED.modifyPreloadedState(window.__PRELOADED_STATE__);"), str;
+ },
+ detailedReleaseDate(str) {
+  let index = str.indexOf('"descriptionReleaseDateTitle"');
+  if (index < 0) return !1;
+  if (index = PatcherUtils.indexOf(str, ".toLocaleDateString(", index, 1000, !0), index > -1 && (index = PatcherUtils.indexOf(str, ",", index, 10, !0)), index < 0) return !1;
+  let options = JSON.stringify({
+   year: "numeric",
+   month: "2-digit",
+   day: "2-digit",
+   hour: "2-digit",
+   minute: "2-digit",
+   hour12: !1,
+   timeZoneName: "short"
+  });
+  return str = PatcherUtils.insertAt(str, index, options + ","), str;
+ }
+}, PATCH_ORDERS = PatcherUtils.filterPatches([
+ "filterGames",
+ "filterGamesProductCard",
+ "modifyPreloadedState",
+ "detailedReleaseDate"
+]), ALL_PATCHES = [...PATCH_ORDERS];
+class Patcher {
+ static patchNativeBind() {
+  let nativeBind = Function.prototype.bind;
+  Function.prototype.bind = function() {
+   let valid = !1;
+   if (this.name.length <= 2 && arguments.length === 2 && arguments[0] === null) {
+    if (arguments[1] === 0 || typeof arguments[1] === "function") valid = !0;
+   }
+   if (!valid) return nativeBind.apply(this, arguments);
+   if (typeof arguments[1] === "function") BxLogger.info(LOG_TAG, "Restored Function.prototype.bind()"), Function.prototype.bind = nativeBind;
+   let orgFunc = this, newFunc = (a, item2) => {
+    Patcher.checkChunks(item2), orgFunc(a, item2);
+   };
+   return nativeBind.apply(newFunc, arguments);
+  };
+ }
+ static checkChunks(item) {
+  let patchesToCheck, appliedPatches, chunkData = item[1], patchesMap = {}, patcherCache = PatcherCache.getInstance();
+  for (let chunkId in chunkData) {
+   appliedPatches = [];
+   let cachedPatches = patcherCache.getPatches(chunkId);
+   if (cachedPatches) patchesToCheck = cachedPatches.slice(0), patchesToCheck.push(...PATCH_ORDERS);
+   else patchesToCheck = PATCH_ORDERS.slice(0);
+   if (!patchesToCheck.length) continue;
+   let func = chunkData[chunkId], funcStr = func.toString(), patchedFuncStr = funcStr, modified = !1, chunkAppliedPatches = [];
+   for (let patchIndex = 0;patchIndex < patchesToCheck.length; patchIndex++) {
+    let patchName = patchesToCheck[patchIndex];
+    if (appliedPatches.indexOf(patchName) > -1) continue;
+    if (!PATCHES[patchName]) continue;
+    let tmpStr = PATCHES[patchName].call(null, patchedFuncStr);
+    if (!tmpStr) continue;
+    modified = !0, patchedFuncStr = tmpStr, appliedPatches.push(patchName), chunkAppliedPatches.push(patchName), patchesToCheck.splice(patchIndex, 1), patchIndex--, PATCH_ORDERS = PATCH_ORDERS.filter((item2) => item2 != patchName);
+   }
+   if (modified) {
+    BxLogger.info(LOG_TAG, `✅ [${chunkId}] ${chunkAppliedPatches.join(", ")}`), PATCH_ORDERS.length && BxLogger.info(LOG_TAG, "Remaining patches", PATCH_ORDERS), BX_FLAGS.Debug && console.time(LOG_TAG);
+    try {
+     chunkData[chunkId] = eval(patchedFuncStr);
+    } catch (e) {
+     if (e instanceof Error) BxLogger.error(LOG_TAG, "Error", appliedPatches, e.message, patchedFuncStr);
+    }
+    BX_FLAGS.Debug && console.timeEnd(LOG_TAG);
+   }
+   if (appliedPatches.length) patchesMap[chunkId] = appliedPatches;
+  }
+  if (Object.keys(patchesMap).length) patcherCache.saveToCache(patchesMap);
+ }
+ static init() {
+  Patcher.patchNativeBind();
+ }
+}
+class PatcherCache {
+ static instance;
+ static getInstance = () => PatcherCache.instance ?? (PatcherCache.instance = new PatcherCache);
+ KEY_CACHE = "BetterXboxStore.Patches.Cache";
+ KEY_SIGNATURE = "BetterXboxStore.Patches.Cache.Signature";
+ CACHE;
+ constructor() {
+  this.checkSignature(), this.CACHE = JSON.parse(window.localStorage.getItem(this.KEY_CACHE) || "{}"), BxLogger.info(LOG_TAG, "Cache", this.CACHE), PATCH_ORDERS = this.cleanupPatches(PATCH_ORDERS), BxLogger.info(LOG_TAG, "PATCH_ORDERS", PATCH_ORDERS.slice(0));
+ }
+ getSignature() {
+  let scriptVersion = SCRIPT_VERSION, patches = JSON.stringify(ALL_PATCHES), clientHash = "", $link = document.querySelector('link[data-chunk="client"][as="script"][href*="/client."]');
+  if ($link) {
+   let match = /\/client\.([^\.]+)\.js/.exec($link.href);
+   match && (clientHash = match[1]);
+  }
+  return `${scriptVersion}:${clientHash}:${hashCode(patches)}`;
+ }
+ clear() {
+  window.localStorage.removeItem(this.KEY_CACHE), this.CACHE = {};
+ }
+ checkSignature() {
+  let storedSig = window.localStorage.getItem(this.KEY_SIGNATURE) || 0, currentSig = this.getSignature();
+  if (currentSig !== storedSig) BxLogger.warning(LOG_TAG, "Signature changed"), window.localStorage.setItem(this.KEY_SIGNATURE, currentSig.toString()), this.clear();
+  else BxLogger.info(LOG_TAG, "Signature unchanged");
+ }
+ cleanupPatches(patches) {
+  return patches.filter((item2) => {
+   for (let id in this.CACHE)
+    if (this.CACHE[id].includes(item2)) return !1;
+   return !0;
+  });
+ }
+ getPatches(id) {
+  return this.CACHE[id];
+ }
+ saveToCache(subCache) {
+  for (let id in subCache) {
+   let patchNames = subCache[id], data = this.CACHE[id];
+   if (!data) this.CACHE[id] = patchNames;
+   else for (let patchName of patchNames)
+     if (!data.includes(patchName)) data.push(patchName);
+  }
+  window.localStorage.setItem(this.KEY_CACHE, JSON.stringify(this.CACHE));
+ }
+}
+var FeatureGates = {
+ EnableFranchisePageLink: !0
+};
+if (BX_FLAGS.FeatureGates) FeatureGates = Object.assign(BX_FLAGS.FeatureGates, FeatureGates);
+function normalizeFiltersList(resp) {
+ if (resp.$schemaVersion !== 1) return null;
+ let data = resp.data, normalized = {
+  allow: {
+   developers: new Set,
+   ids: new Set,
+   publishers: new Set
+  },
+  block: {
+   developers: new Set,
+   ids: new Set,
+   publishers: new Set
+  }
+ }, types = Object.keys(normalized.allow);
+ for (let key in data) {
+  let normalizedTarget = key === "_exception" ? normalized.allow : normalized.block, field;
+  for (field of types)
+   data[key][field].forEach((item2) => normalizedTarget[field].add(item2.trim().toLocaleLowerCase()));
+ }
+ return normalized;
+}
+function shouldAllowProduct(product) {
+ let filters = window.BX_LIST_FILTERS;
+ if (!filters || !product) return !0;
+ let id = product.productId.toLowerCase(), publisherName = (product.publisherName || "").trim().toLocaleLowerCase(), developerName = (product.developerName || "").trim().toLocaleLowerCase();
+ if (filters.allow.ids.has(id)) return !0;
+ if (publisherName) {
+  for (let name of filters.allow.publishers)
+   if (publisherName.includes(name)) return !0;
+ }
+ if (developerName) {
+  for (let name of filters.allow.developers)
+   if (developerName.includes(name)) return !0;
+ }
+ if (filters.block.ids.has(id)) return !1;
+ if (publisherName) {
+  for (let name of filters.block.publishers)
+   if (publisherName.includes(name)) return !1;
+ }
+ if (developerName) {
+  for (let name of filters.block.developers)
+   if (developerName.includes(name)) return !1;
+ }
+ return !0;
+}
+function filterPreloadProductDetails(data) {
+ try {
+  let channelData = data.channels.channelData;
+  for (let key in channelData) {
+   if (!key.startsWith("MORELIKE_")) continue;
+   let productSummaries = data.products.productSummaries;
+   channelData[key].data.products = channelData[key].data.products.filter((item2) => {
+    if (item2.productId in productSummaries) return shouldAllowProduct(productSummaries[item2.productId]);
+    return !0;
+   });
+  }
+ } catch (e) {}
+ return data;
+}
+function filterNetworkProductDetails(data) {
+ try {
+  let channelData = data.channels;
+  for (let key in channelData) {
+   if (!key.startsWith("MoreLike_")) continue;
+   let productSummaries = data.productSummaries;
+   channelData[key].products = channelData[key].products.filter((item2) => {
+    let product = productSummaries.find((p) => item2.productId === p.productId);
+    if (product) return shouldAllowProduct(product);
+    return !0;
+   });
+  }
+ } catch (e) {}
+ return data;
+}
+var BxExposed = {
+ modifyPreloadedState: (state) => {
+  let LOG_TAG2 = "PreloadState";
+  try {
+   filterPreloadProductDetails(state.core2);
+  } catch (e) {
+   BxLogger.error(LOG_TAG2, e);
+  }
+  try {
+   for (let exp in FeatureGates)
+    state.experiments.overrideFeatureGates[exp.toLocaleLowerCase()] = FeatureGates[exp];
+  } catch (e) {
+   BxLogger.error(LOG_TAG2, e);
+  }
+  return state;
+ },
+ shouldAllowProduct
+};
+class GhPagesUtils {
+ static fetchLatestCommit() {
+  let currentHash = window.localStorage.getItem("BetterXboxStore.GhPages.CommitHash") || "";
+  window.BX_LIST_FILTERS = GhPagesUtils.getFiltersList(), NATIVE_FETCH("https://api.github.com/repos/redphx/better-xbox-store/branches/gh-pages", {
+   method: "GET",
+   headers: {
+    Accept: "application/vnd.github.v3+json"
+   }
+  }).then((response) => response.json()).then((data) => {
+   let latestCommitHash = data.commit.sha;
+   if (latestCommitHash !== currentHash) window.localStorage.setItem("BetterXboxStore.GhPages.CommitHash", latestCommitHash), window.BX_LIST_FILTERS = GhPagesUtils.getFiltersList(!0, !0);
+  }).catch((error) => {
+   BxLogger.error("GhPagesUtils", "Error fetching the latest commit:", error);
+  });
+ }
+ static getUrl(path) {
+  if (path[0] === "/") alert('`path` must not starts with "/"');
+  let prefix = "https://raw.githubusercontent.com/redphx/better-xbox-store", latestCommitHash = window.localStorage.getItem("BetterXboxStore.GhPages.CommitHash");
+  if (latestCommitHash) return `${prefix}/${latestCommitHash}/${path}`;
+  else return `${prefix}/refs/heads/gh-pages/${path}`;
+ }
+ static getFiltersList(update = !1, refresh = !1) {
+  let key = "BetterXboxStore.GhPages.Filters";
+  update && NATIVE_FETCH(GhPagesUtils.getUrl("filters.json")).then((response) => response.json()).then((json) => {
+   let normalized2 = normalizeFiltersList(json);
+   if (normalized2) window.localStorage.setItem(key, JSON.stringify(json)), BxEventBus.Script.emit("list.filters.updated", {
+     data: normalized2
+    });
+   else window.localStorage.removeItem(key);
+   if (refresh) window.location.reload();
+  });
+  let resp = JSON.parse(window.localStorage.getItem(key) || "{}"), normalized = normalizeFiltersList(resp);
+  if (!normalized) return window.localStorage.removeItem(key), null;
+  return normalized;
+ }
+}
+function interceptHttpRequests() {
+ window.BX_FETCH = window.fetch = async (request, init) => {
+  let url = typeof request === "string" ? request : request.url;
+  if (url.startsWith("https://emerald.xboxservices.com/xboxcomfd/experimentation")) try {
+    let response = await NATIVE_FETCH(request, init), json = await response.json();
+    if (json && json.exp && json.exp.treatments) for (let key in FeatureGates)
+      json.exp.treatments[key] = FeatureGates[key];
+    return response.json = () => Promise.resolve(json), response;
+   } catch (e) {
+    return console.log(e), NATIVE_FETCH(request, init);
+   }
+  if (url.startsWith("https://emerald.xboxservices.com/xboxcomfd/productDetails/")) try {
+    let response = await NATIVE_FETCH(request, init), json = await response.clone().json();
+    return json = filterNetworkProductDetails(json), response.json = () => Promise.resolve(json), response.text = () => Promise.resolve(JSON.stringify(json)), response;
+   } catch (e) {
+    return console.log(e), NATIVE_FETCH(request, init);
+   }
+  return NATIVE_FETCH(request, init);
+ };
+}
+window.BX_EXPOSED = BxExposed;
+function main() {
+ GhPagesUtils.fetchLatestCommit(), interceptHttpRequests(), BxLogger.info("BxFlags", BX_FLAGS), Patcher.init();
+}
+main();

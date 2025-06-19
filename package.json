@@ -1,0 +1,24 @@
+{
+  "name": "better-xbox-store",
+  "module": "src/index.ts",
+  "type": "module",
+  "sideEffects": false,
+  "browserslist": [
+    "Chrome >= 80"
+  ],
+  "bin": {
+    "build": "build.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.16",
+    "@types/node": "^22.15.32",
+    "@types/stylus": "^0.48.43",
+    "@webgpu/types": "^0.1.61",
+    "eslint": "^9.29.0",
+    "eslint-plugin-compat": "^6.0.2",
+    "stylus": "^0.64.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
