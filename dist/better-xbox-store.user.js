@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Better Xbox Store
 // @namespace    https://github.com/redphx
-// @version      1.0.0-beta
+// @version      1.0.0
 // @description  Add QoL features to the xbox.com website
 // @author       redphx
 // @license      MIT
@@ -14,7 +14,7 @@
 // @downloadURL  https://github.com/redphx/better-xbox-store/releases/latest/download/better-xbox-store.user.js
 // ==/UserScript==
 "use strict";
-var SCRIPT_VERSION = "1.0.0-beta";
+var SCRIPT_VERSION = "1.0.0";
 var DEFAULT_FLAGS = {Debug: !0,CheckForUpdate: !0,FeatureGates: null}, BX_FLAGS = Object.assign(DEFAULT_FLAGS, window.BX_FLAGS || {});
 try {delete window.BX_FLAGS;} catch (e) {}
 var NATIVE_FETCH = window.fetch;
