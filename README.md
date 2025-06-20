@@ -11,7 +11,7 @@ Add QoL features to the xbox.com website
 ### 1. Hide shovelwares
 
 Hide trash games everywhere from the store (except autocomplete results in the search bar).  
-If you want to add more games to the filter list, post it in [issue #1](https://github.com/redphx/better-xbox-store/issues/1).
+If you want to add more games to the filter list, post it in [topic #3](https://github.com/redphx/better-xbox-store/discussions/3).
 
 <img width="500" alt="image" src="https://github.com/user-attachments/assets/2fe2cf7c-7212-4650-810e-e67d7762b1e8" />
 
